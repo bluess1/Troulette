@@ -6,6 +6,8 @@ let selectedChip = 10;
 let currentBets = [];
 let scene, camera, renderer, wheel, ball;
 let isSpinning = false;
+let bettingTimeRemaining = 0;
+let countdownInterval;
 
 // Roulette wheel layout (European roulette)
 const wheelNumbers = [
@@ -88,6 +90,11 @@ function handleWebSocketMessage(data) {
             // Update game state
             updateHistory(data.gameState.history);
             updatePlayersList(data.gameState.players);
+            
+            // If betting period active, start countdown
+            if (data.gameState.bettingTimeRemaining > 0) {
+                startBettingCountdown(data.gameState.bettingTimeRemaining);
+            }
             break;
             
         case 'playerJoined':
@@ -101,15 +108,24 @@ function handleWebSocketMessage(data) {
         case 'betPlaced':
             if (data.bet.playerId === playerId) {
                 updateBalance(data.player.balance);
-                document.getElementById('spinButton').disabled = false;
             }
             addLiveBet(data.bet);
             break;
             
+        case 'bettingStarted':
+            startBettingCountdown(data.bettingTime);
+            currentBets = [];
+            document.querySelectorAll('.bet-cell').forEach(cell => {
+                cell.classList.remove('has-bet');
+            });
+            clearLiveBets();
+            break;
+            
         case 'spinStarted':
             isSpinning = true;
-            document.getElementById('spinButton').disabled = true;
+            stopBettingCountdown();
             document.getElementById('spinStatus').textContent = 'Spinning...';
+            disableBetting();
             startWheelSpin();
             break;
             
@@ -117,8 +133,6 @@ function handleWebSocketMessage(data) {
             showResults(data.winningNumber, data.results);
             updateHistory(data.history);
             updatePlayersList(data.players);
-            currentBets = [];
-            clearLiveBets();
             
             // Update player balance if they were involved
             const playerResult = data.results.find(r => r.playerId === playerId);
@@ -129,11 +143,59 @@ function handleWebSocketMessage(data) {
             
             setTimeout(() => {
                 isSpinning = false;
-                document.getElementById('spinStatus').textContent = 'Place your bets';
                 document.getElementById('resultsOverlay').classList.remove('active');
+                enableBetting();
             }, 5000);
             break;
     }
+}
+
+function startBettingCountdown(seconds) {
+    bettingTimeRemaining = seconds;
+    enableBetting();
+    updateSpinStatus();
+    
+    if (countdownInterval) clearInterval(countdownInterval);
+    
+    countdownInterval = setInterval(() => {
+        bettingTimeRemaining--;
+        updateSpinStatus();
+        
+        if (bettingTimeRemaining <= 0) {
+            clearInterval(countdownInterval);
+        }
+    }, 1000);
+}
+
+function stopBettingCountdown() {
+    if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+    }
+    bettingTimeRemaining = 0;
+}
+
+function updateSpinStatus() {
+    const status = document.getElementById('spinStatus');
+    if (bettingTimeRemaining > 0) {
+        status.textContent = `Place bets: ${bettingTimeRemaining}s`;
+    } else {
+        status.textContent = 'Waiting for spin...';
+    }
+}
+
+function enableBetting() {
+    document.querySelectorAll('.bet-cell').forEach(cell => {
+        cell.style.pointerEvents = 'auto';
+        cell.style.opacity = '1';
+    });
+}
+
+function disableBetting() {
+    document.querySelectorAll('.bet-cell').forEach(cell => {
+        cell.style.pointerEvents = 'none';
+        cell.style.opacity = '0.5';
+    });
 }
 
 // 3D Wheel Setup
@@ -261,43 +323,13 @@ function createRouletteWheel() {
         const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
         const sprite = new THREE.Sprite(spriteMaterial);
         
-        sprite.position.x = Math.cos(angle) * (pocketRadius - 0.5);
-        sprite.position.z = Math.sin(angle) * (pocketRadius - 0.5);
+        sprite.position.x = Math.cos(angle) * pocketRadius;
+        sprite.position.z = Math.sin(angle) * pocketRadius;
         sprite.position.y = 1.2;
-        sprite.scale.set(0.6, 0.6, 1);
+        sprite.scale.set(0.8, 0.8, 1);
         
         wheel.add(sprite);
     }
-    
-    // Separator spokes
-    for (let i = 0; i < pocketCount; i++) {
-        const angle = (i / pocketCount) * Math.PI * 2;
-        const spokeGeometry = new THREE.BoxGeometry(0.1, 0.5, 6);
-        const spokeMaterial = new THREE.MeshPhongMaterial({ 
-            color: 0xd4af37,
-            shininess: 100
-        });
-        const spoke = new THREE.Mesh(spokeGeometry, spokeMaterial);
-        
-        spoke.position.x = Math.cos(angle) * 3;
-        spoke.position.z = Math.sin(angle) * 3;
-        spoke.position.y = 0.7;
-        spoke.rotation.y = -angle;
-        
-        wheel.add(spoke);
-    }
-    
-    // Center cone
-    const coneGeometry = new THREE.ConeGeometry(1.5, 1.5, 32);
-    const coneMaterial = new THREE.MeshPhongMaterial({ 
-        color: 0xd4af37,
-        shininess: 100,
-        metalness: 0.5
-    });
-    const cone = new THREE.Mesh(coneGeometry, coneMaterial);
-    cone.position.y = 1.5;
-    cone.castShadow = true;
-    wheel.add(cone);
     
     scene.add(wheel);
 }
@@ -307,62 +339,45 @@ function createBall() {
     const ballMaterial = new THREE.MeshPhongMaterial({ 
         color: 0xffffff,
         shininess: 100,
-        metalness: 0.8
+        specular: 0xffffff
     });
     ball = new THREE.Mesh(ballGeometry, ballMaterial);
-    ball.position.set(6, 2, 0);
     ball.castShadow = true;
+    ball.position.set(6, 0.8, 0);
     scene.add(ball);
 }
 
-let wheelRotation = 0;
 let wheelSpeed = 0;
-let ballAngle = 0;
 let ballSpeed = 0;
+let ballAngle = 0;
 let ballRadius = 6;
-let ballHeight = 2;
-let spinningDown = false;
+let ballHeight = 0.8;
 
 function startWheelSpin() {
     wheelSpeed = 0.15;
-    ballSpeed = -0.25; // Opposite direction
+    ballSpeed = -0.25;
     ballAngle = Math.random() * Math.PI * 2;
     ballRadius = 6;
-    ballHeight = 2;
-    spinningDown = false;
+    ballHeight = 0.8;
 }
 
 function animate() {
     requestAnimationFrame(animate);
     
-    if (isSpinning) {
+    if (isSpinning && (wheelSpeed > 0.001 || ballSpeed < -0.001)) {
         // Rotate wheel
-        wheelRotation += wheelSpeed;
-        wheel.rotation.y = wheelRotation;
-        
-        // Decelerate wheel
+        wheel.rotation.y += wheelSpeed;
         wheelSpeed *= 0.995;
         
         // Move ball
         ballAngle += ballSpeed;
         
-        // Ball physics - spiral down
-        if (!spinningDown && Math.abs(ballSpeed) < 0.1) {
-            spinningDown = true;
-        }
+        // Ball gradually moves inward and down
+        ballRadius -= 0.015;
+        ballHeight -= 0.003;
         
-        if (spinningDown) {
-            ballRadius -= 0.015;
-            ballHeight -= 0.01;
-            ballSpeed *= 0.98;
-            
-            if (ballRadius < 5.5) {
-                ballRadius = 5.5;
-            }
-            if (ballHeight < 0.8) {
-                ballHeight = 0.8;
-            }
-        }
+        if (ballRadius < 0.5) ballRadius = 0.5;
+        if (ballHeight < 0.5) ballHeight = 0.5;
         
         // Update ball position
         ball.position.x = Math.cos(ballAngle) * ballRadius;
@@ -383,22 +398,29 @@ function animate() {
 function setupBettingTable() {
     const mainGrid = document.querySelector('.main-grid');
     
-    // Create 36 numbers in grid (3 rows x 12 columns)
-    for (let i = 1; i <= 36; i++) {
-        const cell = document.createElement('div');
-        cell.className = 'bet-cell number-cell';
-        cell.dataset.number = i;
-        cell.dataset.type = 'straight';
-        cell.textContent = i;
-        
-        if (redNumbers.includes(i)) {
-            cell.classList.add('red');
-        } else {
-            cell.classList.add('black');
+    // Create numbers in proper roulette layout (3 rows)
+    // Row 1: 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36
+    // Row 2: 2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35
+    // Row 3: 1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34
+    
+    for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < 12; col++) {
+            const number = (col * 3) + (3 - row);
+            const cell = document.createElement('div');
+            cell.className = 'bet-cell number-cell';
+            cell.dataset.number = number;
+            cell.dataset.type = 'straight';
+            cell.textContent = number;
+            
+            if (redNumbers.includes(number)) {
+                cell.classList.add('red');
+            } else {
+                cell.classList.add('black');
+            }
+            
+            cell.addEventListener('click', () => placeBet(cell));
+            mainGrid.appendChild(cell);
         }
-        
-        cell.addEventListener('click', () => placeBet(cell));
-        mainGrid.appendChild(cell);
     }
     
     // Setup outside bets
@@ -423,18 +445,11 @@ function setupChipSelector() {
 }
 
 function setupBetControls() {
-    document.getElementById('spinButton').addEventListener('click', () => {
-        if (currentBets.length > 0 && !isSpinning) {
-            ws.send(JSON.stringify({ type: 'spin' }));
-        }
-    });
-    
     document.getElementById('clearBets').addEventListener('click', () => {
         currentBets = [];
         document.querySelectorAll('.bet-cell').forEach(cell => {
             cell.classList.remove('has-bet');
         });
-        document.getElementById('spinButton').disabled = true;
     });
     
     document.getElementById('doubleBets').addEventListener('click', () => {
@@ -447,7 +462,7 @@ function setupBetControls() {
 }
 
 function placeBet(cell) {
-    if (isSpinning) return;
+    if (isSpinning || bettingTimeRemaining <= 0) return;
     
     const betType = cell.dataset.type || 'straight';
     let numbers = [];
