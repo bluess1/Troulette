@@ -22,11 +22,17 @@ const wss = new WebSocketServer({ server });
 // Game state
 let gameState = {
   spinning: false,
+  bettingOpen: false,
   lastWinningNumber: null,
   players: new Map(),
   currentBets: [],
-  history: []
+  history: [],
+  bettingTimeRemaining: 0
 };
+
+let gameLoop = null;
+const BETTING_TIME = 10; // 10 seconds to place bets
+const SPIN_TIME = 10; // 10 seconds for spin
 
 // Broadcast to all connected clients
 function broadcast(data) {
@@ -40,6 +46,103 @@ function broadcast(data) {
 // Generate unique player ID
 function generatePlayerId() {
   return Math.random().toString(36).substr(2, 9);
+}
+
+// Start automatic game cycle
+function startGameCycle() {
+  if (gameLoop) return; // Already running
+  
+  gameLoop = setInterval(() => {
+    if (!gameState.spinning && !gameState.bettingOpen) {
+      startBettingPeriod();
+    }
+  }, 1000);
+}
+
+function startBettingPeriod() {
+  gameState.bettingOpen = true;
+  gameState.bettingTimeRemaining = BETTING_TIME;
+  gameState.currentBets = [];
+  
+  broadcast({
+    type: 'bettingStarted',
+    bettingTime: BETTING_TIME
+  });
+  
+  // Countdown and auto-spin
+  const countdown = setInterval(() => {
+    gameState.bettingTimeRemaining--;
+    
+    if (gameState.bettingTimeRemaining <= 0) {
+      clearInterval(countdown);
+      gameState.bettingOpen = false;
+      spinWheel();
+    }
+  }, 1000);
+}
+
+function spinWheel() {
+  if (gameState.spinning) return;
+  
+  gameState.spinning = true;
+  
+  broadcast({
+    type: 'spinStarted'
+  });
+  
+  // Simulate spin duration
+  setTimeout(() => {
+    const winningNumber = Math.floor(Math.random() * 37); // 0-36
+    gameState.lastWinningNumber = winningNumber;
+    
+    // Process bets
+    const results = [];
+    gameState.currentBets.forEach(bet => {
+      const won = checkWin(bet, winningNumber);
+      const player = gameState.players.get(bet.playerId);
+      
+      if (player) {
+        if (won) {
+          const payout = calculatePayout(bet, winningNumber);
+          player.balance += payout;
+          player.totalWon += payout;
+          
+          results.push({
+            playerId: bet.playerId,
+            username: bet.username,
+            won: true,
+            amount: payout,
+            bet: bet.amount
+          });
+        } else {
+          player.totalLost += bet.amount;
+          results.push({
+            playerId: bet.playerId,
+            username: bet.username,
+            won: false,
+            amount: 0,
+            bet: bet.amount
+          });
+        }
+      }
+    });
+    
+    gameState.history.unshift(winningNumber);
+    if (gameState.history.length > 20) {
+      gameState.history = gameState.history.slice(0, 20);
+    }
+    
+    broadcast({
+      type: 'spinResult',
+      winningNumber: winningNumber,
+      results: results,
+      history: gameState.history,
+      players: Array.from(gameState.players.values())
+    });
+    
+    gameState.currentBets = [];
+    gameState.spinning = false;
+  }, SPIN_TIME * 1000);
 }
 
 // Handle WebSocket connections
@@ -68,7 +171,8 @@ wss.on('connection', (ws) => {
               spinning: gameState.spinning,
               lastWinningNumber: gameState.lastWinningNumber,
               history: gameState.history,
-              players: Array.from(gameState.players.values())
+              players: Array.from(gameState.players.values()),
+              bettingTimeRemaining: gameState.bettingTimeRemaining
             }
           }));
           
@@ -76,11 +180,16 @@ wss.on('connection', (ws) => {
             type: 'playerJoined',
             player: gameState.players.get(playerId)
           });
+          
+          // Start game cycle if first player
+          if (gameState.players.size === 1) {
+            startGameCycle();
+          }
           break;
           
         case 'placeBet':
           const player = gameState.players.get(playerId);
-          if (player && player.balance >= data.amount && !gameState.spinning) {
+          if (player && player.balance >= data.amount && gameState.bettingOpen && !gameState.spinning) {
             player.balance -= data.amount;
             
             const bet = {
@@ -101,68 +210,6 @@ wss.on('connection', (ws) => {
             });
           }
           break;
-          
-        case 'spin':
-          if (!gameState.spinning && gameState.currentBets.length > 0) {
-            gameState.spinning = true;
-            
-            broadcast({
-              type: 'spinStarted'
-            });
-            
-            // Simulate spin duration (10 seconds)
-            setTimeout(() => {
-              const winningNumber = Math.floor(Math.random() * 37); // 0-36
-              gameState.lastWinningNumber = winningNumber;
-              
-              // Process bets
-              const results = [];
-              gameState.currentBets.forEach(bet => {
-                const won = checkWin(bet, winningNumber);
-                const player = gameState.players.get(bet.playerId);
-                
-                if (won) {
-                  const payout = calculatePayout(bet, winningNumber);
-                  player.balance += payout;
-                  player.totalWon += payout;
-                  
-                  results.push({
-                    playerId: bet.playerId,
-                    username: bet.username,
-                    won: true,
-                    amount: payout,
-                    bet: bet.amount
-                  });
-                } else {
-                  player.totalLost += bet.amount;
-                  results.push({
-                    playerId: bet.playerId,
-                    username: bet.username,
-                    won: false,
-                    amount: 0,
-                    bet: bet.amount
-                  });
-                }
-              });
-              
-              gameState.history.unshift(winningNumber);
-              if (gameState.history.length > 20) {
-                gameState.history = gameState.history.slice(0, 20);
-              }
-              
-              broadcast({
-                type: 'spinResult',
-                winningNumber: winningNumber,
-                results: results,
-                history: gameState.history,
-                players: Array.from(gameState.players.values())
-              });
-              
-              gameState.currentBets = [];
-              gameState.spinning = false;
-            }, 10000);
-          }
-          break;
       }
     } catch (err) {
       console.error('Error processing message:', err);
@@ -179,6 +226,14 @@ wss.on('connection', (ws) => {
         playerId: playerId,
         username: player.username
       });
+      
+      // Stop game cycle if no players
+      if (gameState.players.size === 0 && gameLoop) {
+        clearInterval(gameLoop);
+        gameLoop = null;
+        gameState.bettingOpen = false;
+        gameState.spinning = false;
+      }
     }
   });
 });
