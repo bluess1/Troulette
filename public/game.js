@@ -3,7 +3,7 @@ let ws;
 let playerId;
 let playerData;
 let selectedChip = 10;
-let currentBets = [];
+let currentBets = new Map(); // Track bets per cell
 let scene, camera, renderer, wheel, ball;
 let isSpinning = false;
 let bettingTimeRemaining = 0;
@@ -114,10 +114,7 @@ function handleWebSocketMessage(data) {
             
         case 'bettingStarted':
             startBettingCountdown(data.bettingTime);
-            currentBets = [];
-            document.querySelectorAll('.bet-cell').forEach(cell => {
-                cell.classList.remove('has-bet');
-            });
+            clearAllBets();
             clearLiveBets();
             break;
             
@@ -194,7 +191,7 @@ function enableBetting() {
 function disableBetting() {
     document.querySelectorAll('.bet-cell').forEach(cell => {
         cell.style.pointerEvents = 'none';
-        cell.style.opacity = '0.5';
+        cell.style.opacity = '0.7';
     });
 }
 
@@ -411,6 +408,7 @@ function setupBettingTable() {
             cell.dataset.number = number;
             cell.dataset.type = 'straight';
             cell.textContent = number;
+            cell.id = `bet-cell-${number}`;
             
             if (redNumbers.includes(number)) {
                 cell.classList.add('red');
@@ -425,7 +423,9 @@ function setupBettingTable() {
     
     // Setup outside bets
     document.querySelectorAll('.bet-cell').forEach(cell => {
-        if (!cell.classList.contains('number-cell')) {
+        if (!cell.classList.contains('number-cell') && !cell.id) {
+            const betType = cell.dataset.type;
+            cell.id = `bet-cell-${betType}`;
             cell.addEventListener('click', () => placeBet(cell));
         }
     });
@@ -446,17 +446,18 @@ function setupChipSelector() {
 
 function setupBetControls() {
     document.getElementById('clearBets').addEventListener('click', () => {
-        currentBets = [];
-        document.querySelectorAll('.bet-cell').forEach(cell => {
-            cell.classList.remove('has-bet');
-        });
+        clearAllBets();
     });
     
     document.getElementById('doubleBets').addEventListener('click', () => {
-        // Double all current bets
-        const doubled = [...currentBets];
-        doubled.forEach(bet => {
-            placeBetData(bet.type, bet.numbers, bet.amount);
+        const betsToDouble = Array.from(currentBets.entries());
+        betsToDouble.forEach(([cellId, bet]) => {
+            if (playerData.balance >= bet.amount) {
+                const cell = document.getElementById(cellId);
+                if (cell) {
+                    placeBetData(bet.type, bet.numbers, bet.amount, cellId);
+                }
+            }
         });
     });
 }
@@ -476,17 +477,31 @@ function placeBet(cell) {
         numbers = getNumbersForBetType(betType);
     }
     
-    placeBetData(betType, numbers, selectedChip);
-    cell.classList.add('has-bet');
+    placeBetData(betType, numbers, selectedChip, cell.id);
 }
 
-function placeBetData(betType, numbers, amount) {
+function placeBetData(betType, numbers, amount, cellId) {
     if (playerData.balance < amount) {
         alert('Insufficient balance!');
         return;
     }
     
-    currentBets.push({ betType, numbers, amount });
+    // Store bet
+    if (!currentBets.has(cellId)) {
+        currentBets.set(cellId, {
+            betType: betType,
+            numbers: numbers,
+            amount: amount,
+            cellId: cellId
+        });
+    } else {
+        // Add to existing bet
+        const existingBet = currentBets.get(cellId);
+        existingBet.amount += amount;
+    }
+    
+    // Display chip on cell
+    displayChipOnCell(cellId, amount);
     
     ws.send(JSON.stringify({
         type: 'placeBet',
@@ -494,6 +509,34 @@ function placeBetData(betType, numbers, amount) {
         numbers: numbers,
         amount: amount
     }));
+}
+
+function displayChipOnCell(cellId, amount) {
+    const cell = document.getElementById(cellId);
+    if (!cell) return;
+    
+    // Remove existing chip if any
+    const existingChip = cell.querySelector('.bet-chip');
+    if (existingChip) {
+        existingChip.remove();
+    }
+    
+    // Get total bet amount for this cell
+    const bet = currentBets.get(cellId);
+    const totalAmount = bet ? bet.amount : amount;
+    
+    // Create chip element
+    const chip = document.createElement('div');
+    chip.className = 'bet-chip';
+    chip.dataset.value = selectedChip;
+    chip.textContent = totalAmount;
+    
+    cell.appendChild(chip);
+}
+
+function clearAllBets() {
+    currentBets.clear();
+    document.querySelectorAll('.bet-chip').forEach(chip => chip.remove());
 }
 
 function getNumbersForBetType(type) {
