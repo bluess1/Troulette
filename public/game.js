@@ -8,6 +8,11 @@ let scene, camera, renderer, wheel, ball;
 let isSpinning = false;
 let bettingTimeRemaining = 0;
 let countdownInterval;
+let bettingOpen = true;
+let bettingCountdownStarted = false;
+const BETTING_WINDOW_SECONDS = 15;
+const zoomedCameraPosition = new THREE.Vector3(0, 10.5, 14);
+const defaultCameraPosition = new THREE.Vector3(0, 15, 20);
 
 // Roulette wheel layout (European roulette)
 const wheelNumbers = [
@@ -24,6 +29,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupChipSelector();
     setupBettingTable();
     setupBetControls();
+    setupSpinControl();
 });
 
 function setupUsernameModal() {
@@ -86,15 +92,11 @@ function handleWebSocketMessage(data) {
             
             // Initialize 3D wheel
             init3DWheel();
-            
+
             // Update game state
             updateHistory(data.gameState.history);
             updatePlayersList(data.gameState.players);
-            
-            // If betting period active, start countdown
-            if (data.gameState.bettingTimeRemaining > 0) {
-                startBettingCountdown(data.gameState.bettingTimeRemaining);
-            }
+            openBettingRound();
             break;
             
         case 'playerJoined':
@@ -110,19 +112,16 @@ function handleWebSocketMessage(data) {
                 updateBalance(data.player.balance);
             }
             addLiveBet(data.bet);
-            break;
-            
-        case 'bettingStarted':
-            startBettingCountdown(data.bettingTime);
-            clearAllBets();
-            clearLiveBets();
+            updateSpinButtonState();
             break;
             
         case 'spinStarted':
             isSpinning = true;
+            bettingOpen = false;
             stopBettingCountdown();
             document.getElementById('spinStatus').textContent = 'Spinning...';
             disableBetting();
+            setBettingPhase(false);
             startWheelSpin();
             break;
             
@@ -141,25 +140,52 @@ function handleWebSocketMessage(data) {
             setTimeout(() => {
                 isSpinning = false;
                 document.getElementById('resultsOverlay').classList.remove('active');
-                enableBetting();
-            }, 5000);
+                openBettingRound();
+            }, 3200);
+            break;
+
+        case 'betsCleared':
+            if (data.playerId === playerId) {
+                updateBalance(data.balance);
+            }
+            clearAllBets();
+            break;
+
+        case 'betsClearedNotice':
+            removeLiveBetsForPlayer(data.playerId);
             break;
     }
 }
 
-function startBettingCountdown(seconds) {
-    bettingTimeRemaining = seconds;
+function openBettingRound() {
+    bettingOpen = true;
+    bettingCountdownStarted = false;
+    bettingTimeRemaining = BETTING_WINDOW_SECONDS;
+    clearAllBets();
+    clearLiveBets();
     enableBetting();
+    setBettingPhase(true);
     updateSpinStatus();
-    
+    updateSpinButtonState();
+}
+
+function startBettingCountdown() {
+    if (bettingCountdownStarted) return;
+    bettingCountdownStarted = true;
+    updateSpinStatus();
+
     if (countdownInterval) clearInterval(countdownInterval);
-    
+
     countdownInterval = setInterval(() => {
         bettingTimeRemaining--;
         updateSpinStatus();
-        
+
         if (bettingTimeRemaining <= 0) {
             clearInterval(countdownInterval);
+            bettingCountdownStarted = false;
+            if (currentBets.size > 0 && !isSpinning) {
+                requestSpin();
+            }
         }
     }, 1000);
 }
@@ -174,10 +200,17 @@ function stopBettingCountdown() {
 
 function updateSpinStatus() {
     const status = document.getElementById('spinStatus');
-    if (bettingTimeRemaining > 0) {
+    if (!bettingOpen) {
+        status.textContent = 'Wheel in motion...';
+        return;
+    }
+
+    if (bettingCountdownStarted && bettingTimeRemaining > 0) {
         status.textContent = `Place bets: ${bettingTimeRemaining}s`;
+    } else if (currentBets.size > 0) {
+        status.textContent = 'Ready to spin';
     } else {
-        status.textContent = 'Waiting for spin...';
+        status.textContent = 'Awaiting first wager';
     }
 }
 
@@ -195,6 +228,38 @@ function disableBetting() {
     });
 }
 
+function setBettingPhase(isOpen) {
+    const gameContainer = document.getElementById('gameContainer');
+    if (!gameContainer) return;
+    gameContainer.classList.toggle('round-closed', !isOpen);
+}
+
+function setupSpinControl() {
+    const spinButton = document.getElementById('spinButton');
+    spinButton.addEventListener('click', () => {
+        if (spinButton.disabled) return;
+        requestSpin();
+    });
+}
+
+function requestSpin() {
+    if (isSpinning || currentBets.size === 0 || !bettingOpen) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    bettingOpen = false;
+    disableBetting();
+    setBettingPhase(false);
+    updateSpinStatus();
+    updateSpinButtonState();
+    ws.send(JSON.stringify({ type: 'spin' }));
+}
+
+function updateSpinButtonState() {
+    const spinButton = document.getElementById('spinButton');
+    const shouldEnable = !isSpinning && bettingOpen && currentBets.size > 0;
+    spinButton.disabled = !shouldEnable;
+}
+
 // 3D Wheel Setup
 function init3DWheel() {
     const container = document.getElementById('canvas-container');
@@ -205,7 +270,7 @@ function init3DWheel() {
     
     // Camera
     camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
-    camera.position.set(0, 15, 20);
+    camera.position.copy(defaultCameraPosition);
     camera.lookAt(0, 0, 0);
     
     // Renderer
@@ -269,6 +334,26 @@ function createRouletteWheel() {
     const bowl = new THREE.Mesh(bowlGeometry, bowlMaterial);
     bowl.position.y = 0.5;
     wheel.add(bowl);
+
+    const innerRingGeometry = new THREE.TorusGeometry(6.1, 0.25, 16, 100);
+    const innerRingMaterial = new THREE.MeshPhongMaterial({
+        color: 0x3b2a1a,
+        shininess: 70
+    });
+    const innerRing = new THREE.Mesh(innerRingGeometry, innerRingMaterial);
+    innerRing.rotation.x = Math.PI / 2;
+    innerRing.position.y = 0.9;
+    wheel.add(innerRing);
+
+    const metalHubGeometry = new THREE.CylinderGeometry(1.6, 1.8, 0.6, 32);
+    const metalHubMaterial = new THREE.MeshPhongMaterial({
+        color: 0x8c7a4a,
+        shininess: 120,
+        specular: 0xfff2b0
+    });
+    const metalHub = new THREE.Mesh(metalHubGeometry, metalHubMaterial);
+    metalHub.position.y = 0.95;
+    wheel.add(metalHub);
     
     // Number pockets
     const pocketRadius = 5.5;
@@ -365,16 +450,16 @@ function animate() {
         // Rotate wheel
         wheel.rotation.y += wheelSpeed;
         wheelSpeed *= 0.995;
-        
+
         // Move ball
         ballAngle += ballSpeed;
-        
+
         // Ball gradually moves inward and down
-        ballRadius -= 0.015;
-        ballHeight -= 0.003;
-        
-        if (ballRadius < 0.5) ballRadius = 0.5;
-        if (ballHeight < 0.5) ballHeight = 0.5;
+        ballRadius -= 0.012;
+        ballHeight -= 0.0025;
+
+        if (ballRadius < 2.3) ballRadius = 2.3;
+        if (ballHeight < 0.75) ballHeight = 0.75;
         
         // Update ball position
         ball.position.x = Math.cos(ballAngle) * ballRadius;
@@ -387,6 +472,10 @@ function animate() {
         // Gentle idle rotation
         wheel.rotation.y += 0.001;
     }
+
+    const zoomTarget = (isSpinning && wheelSpeed < 0.01) ? zoomedCameraPosition : defaultCameraPosition;
+    camera.position.lerp(zoomTarget, 0.05);
+    camera.lookAt(0, 0, 0);
     
     renderer.render(scene, camera);
 }
@@ -412,8 +501,12 @@ function setupBettingTable() {
             
             if (redNumbers.includes(number)) {
                 cell.classList.add('red');
+                cell.dataset.color = 'red';
+                cell.style.background = 'var(--roulette-red)';
             } else {
                 cell.classList.add('black');
+                cell.dataset.color = 'black';
+                cell.style.background = 'var(--roulette-black)';
             }
             
             cell.addEventListener('click', () => placeBet(cell));
@@ -446,7 +539,7 @@ function setupChipSelector() {
 
 function setupBetControls() {
     document.getElementById('clearBets').addEventListener('click', () => {
-        clearAllBets();
+        clearBetsAndRefund();
     });
     
     document.getElementById('doubleBets').addEventListener('click', () => {
@@ -463,7 +556,7 @@ function setupBetControls() {
 }
 
 function placeBet(cell) {
-    if (isSpinning || bettingTimeRemaining <= 0) return;
+    if (isSpinning || !bettingOpen) return;
     
     const betType = cell.dataset.type || 'straight';
     let numbers = [];
@@ -478,11 +571,28 @@ function placeBet(cell) {
     }
     
     placeBetData(betType, numbers, selectedChip, cell.id);
+    startBettingCountdown();
+}
+
+function clearBetsAndRefund() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        clearAllBets();
+        return;
+    }
+    if (currentBets.size === 0) {
+        return;
+    }
+    ws.send(JSON.stringify({ type: 'clearBets' }));
+    clearAllBets();
 }
 
 function placeBetData(betType, numbers, amount, cellId) {
     if (playerData.balance < amount) {
         alert('Insufficient balance!');
+        return;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        alert('Connection lost. Rejoin to place bets.');
         return;
     }
     
@@ -502,6 +612,8 @@ function placeBetData(betType, numbers, amount, cellId) {
     
     // Display chip on cell
     displayChipOnCell(cellId, amount);
+    updateSpinStatus();
+    updateSpinButtonState();
     
     ws.send(JSON.stringify({
         type: 'placeBet',
@@ -537,6 +649,8 @@ function displayChipOnCell(cellId, amount) {
 function clearAllBets() {
     currentBets.clear();
     document.querySelectorAll('.bet-chip').forEach(chip => chip.remove());
+    updateSpinStatus();
+    updateSpinButtonState();
 }
 
 function getNumbersForBetType(type) {
@@ -589,13 +703,15 @@ function addLiveBet(bet) {
     const container = document.getElementById('liveBets');
     const div = document.createElement('div');
     div.className = 'bet-item';
+    div.dataset.playerId = bet.playerId;
+    const betTypeLabel = (bet.betType || bet.type || '').toUpperCase();
     
     div.innerHTML = `
         <div class="bet-item-header">
             <span class="bet-username">${bet.username}</span>
             <span class="bet-amount">$${bet.amount}</span>
         </div>
-        <div class="bet-type">${bet.type.toUpperCase()}</div>
+        <div class="bet-type">${betTypeLabel}</div>
     `;
     
     container.insertBefore(div, container.firstChild);
@@ -610,6 +726,11 @@ function clearLiveBets() {
     document.getElementById('liveBets').innerHTML = '';
 }
 
+function removeLiveBetsForPlayer(playerId) {
+    const container = document.getElementById('liveBets');
+    const items = Array.from(container.querySelectorAll(`.bet-item[data-player-id="${playerId}"]`));
+    items.forEach(item => item.remove());
+}
 function updatePlayersList(players) {
     const container = document.getElementById('playersList');
     container.innerHTML = '';
