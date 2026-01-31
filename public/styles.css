@@ -170,12 +170,13 @@ body {
 /* Game Layout */
 .game-layout {
     display: grid;
-    grid-template-columns: 1fr 2.5fr 280px;
+    grid-template-columns: 2.3fr 1.4fr 280px;
     gap: 1.5rem;
     padding: 1.5rem;
     max-width: 100%;
     margin: 0 auto;
     height: calc(100vh - 80px);
+    transition: grid-template-columns 0.5s ease;
 }
 
 /* Wheel Container */
@@ -196,6 +197,7 @@ body {
     border-radius: 4px;
     overflow: hidden;
     background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.05) 0%, transparent 70%);
+    min-height: 520px;
 }
 
 .wheel-controls {
@@ -217,7 +219,11 @@ body {
 
 /* Betting Table - Casino Style */
 .betting-container {
-    background: var(--table-green);
+    background: radial-gradient(circle at 30% 20%, #1c6b45 0%, var(--table-green) 45%, #0d3e27 100%);
+    background-image:
+        radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.06), transparent 40%),
+        radial-gradient(circle at 80% 80%, rgba(0, 0, 0, 0.25), transparent 45%),
+        repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0 8px, transparent 8px 16px);
     border: 3px solid var(--dark-wood);
     border-radius: 12px;
     padding: 2rem;
@@ -225,11 +231,13 @@ body {
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    transition: transform 0.4s ease, opacity 0.4s ease;
 }
 
 .betting-table {
     margin-bottom: 1.5rem;
     flex: 1;
+    transition: opacity 0.3s ease;
 }
 
 .numbers-grid {
@@ -253,6 +261,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    background: rgba(0, 0, 0, 0.05);
 }
 
 .bet-cell:hover {
@@ -261,14 +270,15 @@ body {
 }
 
 .bet-cell.zero {
-    background: var(--table-green);
+    background: linear-gradient(135deg, #0d6b3b 0%, #0a522d 100%);
     grid-column: 1 / -1;
     font-size: 1.5rem;
     padding: 1.2rem;
     border: 3px solid var(--gold);
-    color: var(--gold);
+    color: #f7e7a1;
     font-family: 'Cinzel', serif;
     letter-spacing: 0.2em;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
 }
 
 .main-grid {
@@ -287,16 +297,27 @@ body {
     font-size: 1.1rem;
     font-weight: 700;
     position: relative;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
 }
 
 .number-cell.red {
     background: var(--roulette-red);
     color: white;
+    box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.35);
 }
 
 .number-cell.black {
     background: var(--roulette-black);
     color: white;
+    box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.45);
+}
+
+.number-cell[data-color="red"] {
+    background: var(--roulette-red);
+}
+
+.number-cell[data-color="black"] {
+    background: var(--roulette-black);
 }
 
 /* Chip display on bet cells */
@@ -676,12 +697,13 @@ body {
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.9);
+    background: rgba(0, 0, 0, 0.7);
     display: none;
     align-items: center;
     justify-content: center;
     z-index: 999;
     backdrop-filter: blur(5px);
+    padding: 2rem;
 }
 
 .results-overlay.active {
@@ -690,21 +712,21 @@ body {
 
 .results-content {
     background: linear-gradient(165deg, var(--deep-green) 0%, var(--rich-green) 100%);
-    padding: 3rem;
+    padding: 1.8rem 2rem;
     border-radius: 8px;
     border: 2px solid var(--gold);
     box-shadow: 0 20px 60px rgba(212, 175, 55, 0.4);
-    max-width: 600px;
+    max-width: 460px;
     width: 90%;
     text-align: center;
 }
 
 .winning-number {
     font-family: 'Cinzel', serif;
-    font-size: 6rem;
+    font-size: 3.8rem;
     font-weight: 700;
     color: var(--bright-gold);
-    margin-bottom: 2rem;
+    margin-bottom: 1rem;
     text-shadow: 0 4px 20px rgba(212, 175, 55, 0.6);
     animation: numberReveal 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55);
 }
@@ -721,9 +743,22 @@ body {
 }
 
 .results-list {
-    margin-top: 2rem;
-    max-height: 300px;
+    margin-top: 1rem;
+    max-height: 200px;
     overflow-y: auto;
+}
+
+.round-closed .game-layout {
+    grid-template-columns: 2.9fr 1fr 280px;
+}
+
+.round-closed .betting-container {
+    transform: scale(0.86) translateY(12px);
+    opacity: 0.5;
+}
+
+.round-closed .betting-table {
+    opacity: 0.4;
 }
 
 .result-item {

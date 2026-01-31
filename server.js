@@ -55,6 +55,30 @@ wss.on('connection', (ws) => {
             broadcast({ type: 'betPlaced', bet, player });
           }
           break;
+
+        case 'clearBets':
+          if (!gameState.spinning) {
+            const playerToRefund = gameState.players.get(playerId);
+            if (playerToRefund) {
+              const betsToRefund = gameState.currentBets.filter(bet => bet.playerId === playerId);
+              const refundTotal = betsToRefund.reduce((sum, bet) => sum + bet.amount, 0);
+              if (refundTotal > 0) {
+                playerToRefund.balance += refundTotal;
+              }
+              gameState.currentBets = gameState.currentBets.filter(bet => bet.playerId !== playerId);
+              ws.send(JSON.stringify({
+                type: 'betsCleared',
+                playerId,
+                balance: playerToRefund.balance,
+                refundTotal
+              }));
+              broadcast({
+                type: 'betsClearedNotice',
+                playerId
+              });
+            }
+          }
+          break;
           
         case 'spin':
           if (!gameState.spinning && gameState.currentBets.length > 0) {
@@ -86,7 +110,7 @@ wss.on('connection', (ws) => {
               });
               gameState.currentBets = [];
               gameState.spinning = false;
-            }, 6000); // 6 seconds for animation
+            }, 8000); // 8 seconds for animation
           }
           break;
       }

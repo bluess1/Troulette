@@ -5,9 +5,15 @@ let playerData;
 let selectedChip = 10;
 let currentBets = new Map(); // Track bets per cell
 let scene, camera, renderer, wheel, ball;
+const clock = new THREE.Clock();
 let isSpinning = false;
 let bettingTimeRemaining = 0;
 let countdownInterval;
+let bettingOpen = true;
+let bettingCountdownStarted = false;
+const BETTING_WINDOW_SECONDS = 18;
+const zoomedCameraPosition = new THREE.Vector3(0, 9.8, 13.5);
+const defaultCameraPosition = new THREE.Vector3(0, 14.5, 20.5);
 
 // Roulette wheel layout (European roulette)
 const wheelNumbers = [
@@ -24,6 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupChipSelector();
     setupBettingTable();
     setupBetControls();
+    setupSpinControl();
 });
 
 function setupUsernameModal() {
@@ -86,15 +93,11 @@ function handleWebSocketMessage(data) {
             
             // Initialize 3D wheel
             init3DWheel();
-            
+
             // Update game state
             updateHistory(data.gameState.history);
             updatePlayersList(data.gameState.players);
-            
-            // If betting period active, start countdown
-            if (data.gameState.bettingTimeRemaining > 0) {
-                startBettingCountdown(data.gameState.bettingTimeRemaining);
-            }
+            openBettingRound();
             break;
             
         case 'playerJoined':
@@ -110,19 +113,16 @@ function handleWebSocketMessage(data) {
                 updateBalance(data.player.balance);
             }
             addLiveBet(data.bet);
-            break;
-            
-        case 'bettingStarted':
-            startBettingCountdown(data.bettingTime);
-            clearAllBets();
-            clearLiveBets();
+            updateSpinButtonState();
             break;
             
         case 'spinStarted':
             isSpinning = true;
+            bettingOpen = false;
             stopBettingCountdown();
             document.getElementById('spinStatus').textContent = 'Spinning...';
             disableBetting();
+            setBettingPhase(false);
             startWheelSpin();
             break;
             
@@ -141,25 +141,52 @@ function handleWebSocketMessage(data) {
             setTimeout(() => {
                 isSpinning = false;
                 document.getElementById('resultsOverlay').classList.remove('active');
-                enableBetting();
-            }, 5000);
+                openBettingRound();
+            }, 3200);
+            break;
+
+        case 'betsCleared':
+            if (data.playerId === playerId) {
+                updateBalance(data.balance);
+            }
+            clearAllBets();
+            break;
+
+        case 'betsClearedNotice':
+            removeLiveBetsForPlayer(data.playerId);
             break;
     }
 }
 
-function startBettingCountdown(seconds) {
-    bettingTimeRemaining = seconds;
+function openBettingRound() {
+    bettingOpen = true;
+    bettingCountdownStarted = false;
+    bettingTimeRemaining = BETTING_WINDOW_SECONDS;
+    clearAllBets();
+    clearLiveBets();
     enableBetting();
+    setBettingPhase(true);
     updateSpinStatus();
-    
+    updateSpinButtonState();
+}
+
+function startBettingCountdown() {
+    if (bettingCountdownStarted) return;
+    bettingCountdownStarted = true;
+    updateSpinStatus();
+
     if (countdownInterval) clearInterval(countdownInterval);
-    
+
     countdownInterval = setInterval(() => {
         bettingTimeRemaining--;
         updateSpinStatus();
-        
+
         if (bettingTimeRemaining <= 0) {
             clearInterval(countdownInterval);
+            bettingCountdownStarted = false;
+            if (currentBets.size > 0 && !isSpinning) {
+                requestSpin();
+            }
         }
     }, 1000);
 }
@@ -174,10 +201,17 @@ function stopBettingCountdown() {
 
 function updateSpinStatus() {
     const status = document.getElementById('spinStatus');
-    if (bettingTimeRemaining > 0) {
+    if (!bettingOpen) {
+        status.textContent = 'Wheel in motion...';
+        return;
+    }
+
+    if (bettingCountdownStarted && bettingTimeRemaining > 0) {
         status.textContent = `Place bets: ${bettingTimeRemaining}s`;
+    } else if (currentBets.size > 0) {
+        status.textContent = 'Ready to spin';
     } else {
-        status.textContent = 'Waiting for spin...';
+        status.textContent = 'Awaiting first wager';
     }
 }
 
@@ -195,40 +229,85 @@ function disableBetting() {
     });
 }
 
+function setBettingPhase(isOpen) {
+    const gameContainer = document.getElementById('gameContainer');
+    if (!gameContainer) return;
+    gameContainer.classList.toggle('round-closed', !isOpen);
+}
+
+function setupSpinControl() {
+    const spinButton = document.getElementById('spinButton');
+    spinButton.addEventListener('click', () => {
+        if (spinButton.disabled) return;
+        requestSpin();
+    });
+}
+
+function requestSpin() {
+    if (isSpinning || currentBets.size === 0 || !bettingOpen) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    bettingOpen = false;
+    disableBetting();
+    setBettingPhase(false);
+    updateSpinStatus();
+    updateSpinButtonState();
+    ws.send(JSON.stringify({ type: 'spin' }));
+}
+
+function updateSpinButtonState() {
+    const spinButton = document.getElementById('spinButton');
+    const shouldEnable = !isSpinning && bettingOpen && currentBets.size > 0;
+    spinButton.disabled = !shouldEnable;
+}
+
 // 3D Wheel Setup
 function init3DWheel() {
     const container = document.getElementById('canvas-container');
     
     // Scene
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0d3d29);
+    scene.background = new THREE.Color(0x0b2f24);
     
     // Camera
-    camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
-    camera.position.set(0, 15, 20);
+    camera = new THREE.PerspectiveCamera(38, container.clientWidth / container.clientHeight, 0.1, 1000);
+    camera.position.copy(defaultCameraPosition);
     camera.lookAt(0, 0, 0);
     
     // Renderer
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.physicallyCorrectLights = true;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
     container.appendChild(renderer.domElement);
     
     // Lights
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.35);
     scene.add(ambientLight);
     
-    const spotLight = new THREE.SpotLight(0xffd700, 0.8);
-    spotLight.position.set(0, 30, 0);
+    const spotLight = new THREE.SpotLight(0xffd6a0, 1.15);
+    spotLight.position.set(8, 24, 10);
     spotLight.castShadow = true;
     spotLight.shadow.mapSize.width = 2048;
     spotLight.shadow.mapSize.height = 2048;
     scene.add(spotLight);
     
-    const rimLight = new THREE.PointLight(0xd4af37, 0.5);
-    rimLight.position.set(10, 5, 10);
+    const rimLight = new THREE.PointLight(0xf2c879, 0.85);
+    rimLight.position.set(-14, 8, -8);
     scene.add(rimLight);
+
+    const fillLight = new THREE.PointLight(0x7aa79b, 0.35);
+    fillLight.position.set(0, 6, 14);
+    scene.add(fillLight);
+
+    const kickerLight = new THREE.PointLight(0xffffff, 0.3);
+    kickerLight.position.set(14, 3, -12);
+    scene.add(kickerLight);
     
     // Create roulette wheel
     createRouletteWheel();
@@ -237,6 +316,7 @@ function init3DWheel() {
     createBall();
     
     // Animation loop
+    clock.start();
     animate();
     
     // Handle window resize
@@ -251,27 +331,112 @@ function createRouletteWheel() {
     wheel = new THREE.Group();
     
     // Base
-    const baseGeometry = new THREE.CylinderGeometry(8, 8, 1, 64);
-    const baseMaterial = new THREE.MeshPhongMaterial({ 
-        color: 0x2a1810,
-        shininess: 30
+    const baseGeometry = new THREE.CylinderGeometry(8.2, 8.2, 1.1, 64);
+    const baseMaterial = new THREE.MeshPhysicalMaterial({ 
+        map: createWoodTexture(),
+        roughness: 0.32,
+        metalness: 0.18,
+        clearcoat: 0.65,
+        clearcoatRoughness: 0.35,
+        envMapIntensity: 0.9
     });
     const base = new THREE.Mesh(baseGeometry, baseMaterial);
     base.receiveShadow = true;
     wheel.add(base);
+
+    const baseLipGeometry = new THREE.CylinderGeometry(8.5, 8.1, 0.2, 80);
+    const baseLipMaterial = new THREE.MeshPhysicalMaterial({
+        color: 0x2a1a10,
+        roughness: 0.3,
+        metalness: 0.2,
+        clearcoat: 0.7,
+        clearcoatRoughness: 0.25
+    });
+    const baseLip = new THREE.Mesh(baseLipGeometry, baseLipMaterial);
+    baseLip.position.y = 0.6;
+    wheel.add(baseLip);
     
     // Inner bowl
-    const bowlGeometry = new THREE.CylinderGeometry(7, 6, 0.8, 64);
-    const bowlMaterial = new THREE.MeshPhongMaterial({ 
-        color: 0x1a5c3f,
-        shininess: 50
+    const bowlGeometry = new THREE.CylinderGeometry(7.1, 6.2, 0.9, 64);
+    const bowlMaterial = new THREE.MeshPhysicalMaterial({ 
+        color: 0x0f5b3a,
+        roughness: 0.38,
+        metalness: 0.12,
+        clearcoat: 0.5,
+        clearcoatRoughness: 0.45
     });
     const bowl = new THREE.Mesh(bowlGeometry, bowlMaterial);
-    bowl.position.y = 0.5;
+    bowl.position.y = 0.55;
     wheel.add(bowl);
+
+    const outerRimGeometry = new THREE.TorusGeometry(7.35, 0.3, 24, 140);
+    const outerRimMaterial = new THREE.MeshPhysicalMaterial({
+        color: 0x3a2416,
+        roughness: 0.28,
+        metalness: 0.25,
+        clearcoat: 0.75,
+        clearcoatRoughness: 0.25,
+        envMapIntensity: 1.1
+    });
+    const outerRim = new THREE.Mesh(outerRimGeometry, outerRimMaterial);
+    outerRim.rotation.x = Math.PI / 2;
+    outerRim.position.y = 1.02;
+    wheel.add(outerRim);
+
+    const innerRingGeometry = new THREE.TorusGeometry(5.95, 0.22, 16, 120);
+    const innerRingMaterial = new THREE.MeshPhysicalMaterial({
+        color: 0x57402a,
+        roughness: 0.25,
+        metalness: 0.32,
+        clearcoat: 0.6,
+        clearcoatRoughness: 0.3
+    });
+    const innerRing = new THREE.Mesh(innerRingGeometry, innerRingMaterial);
+    innerRing.rotation.x = Math.PI / 2;
+    innerRing.position.y = 1.02;
+    wheel.add(innerRing);
+
+    const metalHubGeometry = new THREE.CylinderGeometry(1.8, 2.3, 0.75, 64);
+    const metalHubMaterial = new THREE.MeshPhysicalMaterial({
+        color: 0xc4a86b,
+        roughness: 0.14,
+        metalness: 0.95,
+        clearcoat: 0.35,
+        clearcoatRoughness: 0.18,
+        envMapIntensity: 1.2
+    });
+    const metalHub = new THREE.Mesh(metalHubGeometry, metalHubMaterial);
+    metalHub.position.y = 1.1;
+    wheel.add(metalHub);
+
+    const metalCapGeometry = new THREE.CylinderGeometry(2.4, 2.6, 0.22, 64);
+    const metalCapMaterial = new THREE.MeshPhysicalMaterial({
+        color: 0xd7b97a,
+        roughness: 0.12,
+        metalness: 1.0,
+        clearcoat: 0.45,
+        clearcoatRoughness: 0.12,
+        envMapIntensity: 1.25
+    });
+    const metalCap = new THREE.Mesh(metalCapGeometry, metalCapMaterial);
+    metalCap.position.y = 1.45;
+    wheel.add(metalCap);
+
+    const rotorGeometry = new THREE.CylinderGeometry(4.4, 4.6, 0.35, 64);
+    const rotorMaterial = new THREE.MeshPhysicalMaterial({
+        map: createWoodTexture(),
+        roughness: 0.2,
+        metalness: 0.18,
+        clearcoat: 0.9,
+        clearcoatRoughness: 0.18,
+        envMapIntensity: 1.0
+    });
+    const rotor = new THREE.Mesh(rotorGeometry, rotorMaterial);
+    rotor.position.y = 1.02;
+    wheel.add(rotor);
     
     // Number pockets
-    const pocketRadius = 5.5;
+    const pocketRadius = 5.35;
     const pocketCount = wheelNumbers.length;
     
     for (let i = 0; i < pocketCount; i++) {
@@ -279,7 +444,7 @@ function createRouletteWheel() {
         const number = wheelNumbers[i];
         
         // Pocket
-        const pocketGeometry = new THREE.BoxGeometry(0.8, 0.3, 0.6);
+        const pocketGeometry = new THREE.BoxGeometry(0.74, 0.28, 0.58);
         let pocketColor;
         
         if (number === 0) {
@@ -290,57 +455,135 @@ function createRouletteWheel() {
             pocketColor = 0x000000; // Black
         }
         
-        const pocketMaterial = new THREE.MeshPhongMaterial({ 
+        const pocketMaterial = new THREE.MeshPhysicalMaterial({ 
             color: pocketColor,
-            shininess: 80
+            roughness: 0.42,
+            metalness: 0.18,
+            clearcoat: 0.2,
+            clearcoatRoughness: 0.6
         });
         const pocket = new THREE.Mesh(pocketGeometry, pocketMaterial);
         
         pocket.position.x = Math.cos(angle) * pocketRadius;
         pocket.position.z = Math.sin(angle) * pocketRadius;
-        pocket.position.y = 0.6;
+        pocket.position.y = 0.82;
         pocket.rotation.y = -angle;
         
         pocket.castShadow = true;
         wheel.add(pocket);
         
         // Number label (using sprite)
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        canvas.width = 128;
-        canvas.height = 128;
-        
-        context.fillStyle = '#ffd700';
-        context.font = 'bold 80px Cinzel';
-        context.textAlign = 'center';
-        context.textBaseline = 'middle';
-        context.fillText(number.toString(), 64, 64);
-        
-        const texture = new THREE.CanvasTexture(canvas);
-        const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
-        const sprite = new THREE.Sprite(spriteMaterial);
-        
-        sprite.position.x = Math.cos(angle) * pocketRadius;
-        sprite.position.z = Math.sin(angle) * pocketRadius;
-        sprite.position.y = 1.2;
-        sprite.scale.set(0.8, 0.8, 1);
-        
-        wheel.add(sprite);
+        const label = createNumberLabel(number);
+        label.position.x = Math.cos(angle) * (pocketRadius + 0.55);
+        label.position.z = Math.sin(angle) * (pocketRadius + 0.55);
+        label.position.y = 1.38;
+        label.rotation.y = -angle + Math.PI / 2;
+        label.rotation.x = -Math.PI / 2.1;
+        wheel.add(label);
     }
-    
+
+    createNumberRing();
+
     scene.add(wheel);
 }
 
+function createNumberRing() {
+    const ringGroup = new THREE.Group();
+    const ringRadius = 6.6;
+    const ringHeight = 0.35;
+    const segmentAngle = (Math.PI * 2) / wheelNumbers.length;
+
+    wheelNumbers.forEach((number, index) => {
+        const color = number === 0 ? 0x1a7b42 : (redNumbers.includes(number) ? 0xd12a2a : 0x1a1a1a);
+        const segmentGeometry = new THREE.CylinderGeometry(ringRadius, ringRadius, ringHeight, 8, 1, false, index * segmentAngle, segmentAngle);
+        const segmentMaterial = new THREE.MeshPhysicalMaterial({
+            color,
+            roughness: 0.35,
+            metalness: 0.2,
+            clearcoat: 0.2,
+            clearcoatRoughness: 0.6
+        });
+        const segment = new THREE.Mesh(segmentGeometry, segmentMaterial);
+        segment.position.y = 1.45;
+        segment.rotation.y = -segmentAngle / 2;
+        ringGroup.add(segment);
+    });
+
+    wheel.add(ringGroup);
+}
+
+function createWoodTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 256, 256);
+    gradient.addColorStop(0, '#5a2a0e');
+    gradient.addColorStop(0.4, '#7a3a12');
+    gradient.addColorStop(0.7, '#8a4a18');
+    gradient.addColorStop(1, '#3f1b07');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 256, 256);
+
+    ctx.globalAlpha = 0.35;
+    for (let i = 0; i < 20; i++) {
+        ctx.beginPath();
+        ctx.strokeStyle = i % 2 === 0 ? '#8a4a1d' : '#3a1806';
+        ctx.lineWidth = 6 + Math.random() * 8;
+        ctx.moveTo(0, i * 12);
+        ctx.bezierCurveTo(60, i * 12 + 10, 160, i * 12 - 10, 256, i * 12 + 6);
+        ctx.stroke();
+    }
+
+    ctx.globalAlpha = 0.18;
+    for (let i = 0; i < 120; i++) {
+        ctx.fillStyle = i % 2 === 0 ? '#2a1206' : '#9a5a22';
+        ctx.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(1.6, 1.6);
+    return texture;
+}
+
+function createNumberLabel(number) {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvas.width = 128;
+    canvas.height = 128;
+
+    context.fillStyle = 'rgba(0,0,0,0)';
+    context.fillRect(0, 0, 128, 128);
+    context.fillStyle = '#f7d26a';
+    context.font = 'bold 72px Cinzel';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(number.toString(), 64, 72);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.MeshStandardMaterial({
+        map: texture,
+        transparent: true,
+        roughness: 0.4,
+        metalness: 0.2
+    });
+    return new THREE.Mesh(new THREE.PlaneGeometry(0.85, 0.85), material);
+}
+
 function createBall() {
-    const ballGeometry = new THREE.SphereGeometry(0.3, 32, 32);
-    const ballMaterial = new THREE.MeshPhongMaterial({ 
-        color: 0xffffff,
-        shininess: 100,
-        specular: 0xffffff
+    const ballGeometry = new THREE.SphereGeometry(0.28, 32, 32);
+    const ballMaterial = new THREE.MeshPhysicalMaterial({ 
+        color: 0xf5f1e6,
+        roughness: 0.1,
+        metalness: 0.2,
+        clearcoat: 0.85,
+        clearcoatRoughness: 0.1
     });
     ball = new THREE.Mesh(ballGeometry, ballMaterial);
     ball.castShadow = true;
-    ball.position.set(6, 0.8, 0);
+    ball.position.set(7.2, 1.35, 0);
     scene.add(ball);
 }
 
@@ -349,44 +592,65 @@ let ballSpeed = 0;
 let ballAngle = 0;
 let ballRadius = 6;
 let ballHeight = 0.8;
+let ballSpiralSpeed = 0.35;
+let spinElapsed = 0;
+let ballPhase = 'rim';
 
 function startWheelSpin() {
-    wheelSpeed = 0.15;
-    ballSpeed = -0.25;
+    wheelSpeed = 0.17;
+    ballSpeed = -0.32;
     ballAngle = Math.random() * Math.PI * 2;
-    ballRadius = 6;
-    ballHeight = 0.8;
+    ballRadius = 7.2;
+    ballHeight = 1.35;
+    ballSpiralSpeed = 0.3 + Math.random() * 0.08;
+    spinElapsed = 0;
+    ballPhase = 'rim';
 }
 
 function animate() {
     requestAnimationFrame(animate);
+    const delta = Math.min(clock.getDelta(), 0.03);
     
     if (isSpinning && (wheelSpeed > 0.001 || ballSpeed < -0.001)) {
+        spinElapsed += delta;
         // Rotate wheel
-        wheel.rotation.y += wheelSpeed;
-        wheelSpeed *= 0.995;
-        
+        wheel.rotation.y += wheelSpeed * (1 + delta);
+        wheelSpeed *= 0.994;
+
         // Move ball
-        ballAngle += ballSpeed;
-        
+        ballAngle += ballSpeed * (1 + delta);
+
         // Ball gradually moves inward and down
-        ballRadius -= 0.015;
-        ballHeight -= 0.003;
-        
-        if (ballRadius < 0.5) ballRadius = 0.5;
-        if (ballHeight < 0.5) ballHeight = 0.5;
+        if (spinElapsed > 2.2 && ballPhase === 'rim') {
+            ballPhase = 'drop';
+        }
+
+        if (ballPhase === 'rim') {
+            ballRadius -= 0.05 * delta;
+        } else {
+            ballRadius -= ballSpiralSpeed * delta * 1.6;
+            ballHeight -= 0.2 * delta;
+        }
+
+        if (ballRadius < 3.6) ballRadius = 3.6;
+        if (ballHeight < 1.05) ballHeight = 1.05;
         
         // Update ball position
+        const wobble = Math.sin(spinElapsed * 7) * 0.045;
         ball.position.x = Math.cos(ballAngle) * ballRadius;
         ball.position.z = Math.sin(ballAngle) * ballRadius;
-        ball.position.y = ballHeight;
+        ball.position.y = ballHeight + wobble;
         
         // Decelerate ball
-        ballSpeed *= 0.992;
+        ballSpeed *= 0.988;
     } else {
         // Gentle idle rotation
         wheel.rotation.y += 0.001;
     }
+
+    const zoomTarget = (isSpinning && wheelSpeed < 0.05) ? zoomedCameraPosition : defaultCameraPosition;
+    camera.position.lerp(zoomTarget, 0.05);
+    camera.lookAt(0, 0, 0);
     
     renderer.render(scene, camera);
 }
@@ -412,8 +676,12 @@ function setupBettingTable() {
             
             if (redNumbers.includes(number)) {
                 cell.classList.add('red');
+                cell.dataset.color = 'red';
+                cell.style.background = 'var(--roulette-red)';
             } else {
                 cell.classList.add('black');
+                cell.dataset.color = 'black';
+                cell.style.background = 'var(--roulette-black)';
             }
             
             cell.addEventListener('click', () => placeBet(cell));
@@ -446,7 +714,7 @@ function setupChipSelector() {
 
 function setupBetControls() {
     document.getElementById('clearBets').addEventListener('click', () => {
-        clearAllBets();
+        clearBetsAndRefund();
     });
     
     document.getElementById('doubleBets').addEventListener('click', () => {
@@ -463,7 +731,7 @@ function setupBetControls() {
 }
 
 function placeBet(cell) {
-    if (isSpinning || bettingTimeRemaining <= 0) return;
+    if (isSpinning || !bettingOpen) return;
     
     const betType = cell.dataset.type || 'straight';
     let numbers = [];
@@ -478,11 +746,28 @@ function placeBet(cell) {
     }
     
     placeBetData(betType, numbers, selectedChip, cell.id);
+    startBettingCountdown();
+}
+
+function clearBetsAndRefund() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        clearAllBets();
+        return;
+    }
+    if (currentBets.size === 0) {
+        return;
+    }
+    ws.send(JSON.stringify({ type: 'clearBets' }));
+    clearAllBets();
 }
 
 function placeBetData(betType, numbers, amount, cellId) {
     if (playerData.balance < amount) {
         alert('Insufficient balance!');
+        return;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        alert('Connection lost. Rejoin to place bets.');
         return;
     }
     
@@ -502,6 +787,8 @@ function placeBetData(betType, numbers, amount, cellId) {
     
     // Display chip on cell
     displayChipOnCell(cellId, amount);
+    updateSpinStatus();
+    updateSpinButtonState();
     
     ws.send(JSON.stringify({
         type: 'placeBet',
@@ -537,6 +824,8 @@ function displayChipOnCell(cellId, amount) {
 function clearAllBets() {
     currentBets.clear();
     document.querySelectorAll('.bet-chip').forEach(chip => chip.remove());
+    updateSpinStatus();
+    updateSpinButtonState();
 }
 
 function getNumbersForBetType(type) {
@@ -589,13 +878,15 @@ function addLiveBet(bet) {
     const container = document.getElementById('liveBets');
     const div = document.createElement('div');
     div.className = 'bet-item';
+    div.dataset.playerId = bet.playerId;
+    const betTypeLabel = (bet.betType || bet.type || '').toUpperCase();
     
     div.innerHTML = `
         <div class="bet-item-header">
             <span class="bet-username">${bet.username}</span>
             <span class="bet-amount">$${bet.amount}</span>
         </div>
-        <div class="bet-type">${bet.type.toUpperCase()}</div>
+        <div class="bet-type">${betTypeLabel}</div>
     `;
     
     container.insertBefore(div, container.firstChild);
@@ -610,6 +901,11 @@ function clearLiveBets() {
     document.getElementById('liveBets').innerHTML = '';
 }
 
+function removeLiveBetsForPlayer(playerId) {
+    const container = document.getElementById('liveBets');
+    const items = Array.from(container.querySelectorAll(`.bet-item[data-player-id="${playerId}"]`));
+    items.forEach(item => item.remove());
+}
 function updatePlayersList(players) {
     const container = document.getElementById('playersList');
     container.innerHTML = '';
