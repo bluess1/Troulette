@@ -10,7 +10,9 @@ let bettingTimeRemaining = 0;
 let countdownInterval;
 let bettingOpen = true;
 let bettingCountdownStarted = false;
-const BETTING_WINDOW_SECONDS = 15;
+const BETTING_WINDOW_SECONDS = 18;
+const zoomedCameraPosition = new THREE.Vector3(0, 9.5, 13);
+const defaultCameraPosition = new THREE.Vector3(0, 17, 23);
 
 // Roulette wheel layout (European roulette)
 const wheelNumbers = [
@@ -119,6 +121,7 @@ function handleWebSocketMessage(data) {
             stopBettingCountdown();
             document.getElementById('spinStatus').textContent = 'Spinning...';
             disableBetting();
+            setBettingPhase(false);
             startWheelSpin();
             break;
             
@@ -150,6 +153,7 @@ function openBettingRound() {
     clearAllBets();
     clearLiveBets();
     enableBetting();
+    setBettingPhase(true);
     updateSpinStatus();
     updateSpinButtonState();
 }
@@ -213,6 +217,12 @@ function disableBetting() {
     });
 }
 
+function setBettingPhase(isOpen) {
+    const gameContainer = document.getElementById('gameContainer');
+    if (!gameContainer) return;
+    gameContainer.classList.toggle('round-closed', !isOpen);
+}
+
 function setupSpinControl() {
     const spinButton = document.getElementById('spinButton');
     spinButton.addEventListener('click', () => {
@@ -227,6 +237,7 @@ function requestSpin() {
 
     bettingOpen = false;
     disableBetting();
+    setBettingPhase(false);
     updateSpinStatus();
     updateSpinButtonState();
     ws.send(JSON.stringify({ type: 'spin' }));
@@ -248,7 +259,7 @@ function init3DWheel() {
     
     // Camera
     camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
-    camera.position.set(0, 15, 20);
+    camera.position.copy(defaultCameraPosition);
     camera.lookAt(0, 0, 0);
     
     // Renderer
@@ -312,6 +323,26 @@ function createRouletteWheel() {
     const bowl = new THREE.Mesh(bowlGeometry, bowlMaterial);
     bowl.position.y = 0.5;
     wheel.add(bowl);
+
+    const innerRingGeometry = new THREE.TorusGeometry(6.1, 0.25, 16, 100);
+    const innerRingMaterial = new THREE.MeshPhongMaterial({
+        color: 0x3b2a1a,
+        shininess: 70
+    });
+    const innerRing = new THREE.Mesh(innerRingGeometry, innerRingMaterial);
+    innerRing.rotation.x = Math.PI / 2;
+    innerRing.position.y = 0.9;
+    wheel.add(innerRing);
+
+    const metalHubGeometry = new THREE.CylinderGeometry(1.6, 1.8, 0.6, 32);
+    const metalHubMaterial = new THREE.MeshPhongMaterial({
+        color: 0x8c7a4a,
+        shininess: 120,
+        specular: 0xfff2b0
+    });
+    const metalHub = new THREE.Mesh(metalHubGeometry, metalHubMaterial);
+    metalHub.position.y = 0.95;
+    wheel.add(metalHub);
     
     // Number pockets
     const pocketRadius = 5.5;
@@ -394,11 +425,11 @@ let ballRadius = 6;
 let ballHeight = 0.8;
 
 function startWheelSpin() {
-    wheelSpeed = 0.15;
-    ballSpeed = -0.25;
+    wheelSpeed = 0.16;
+    ballSpeed = -0.27;
     ballAngle = Math.random() * Math.PI * 2;
-    ballRadius = 6;
-    ballHeight = 0.8;
+    ballRadius = 6.4;
+    ballHeight = 1.1;
 }
 
 function animate() {
@@ -408,16 +439,16 @@ function animate() {
         // Rotate wheel
         wheel.rotation.y += wheelSpeed;
         wheelSpeed *= 0.995;
-        
+
         // Move ball
         ballAngle += ballSpeed;
-        
+
         // Ball gradually moves inward and down
-        ballRadius -= 0.015;
-        ballHeight -= 0.003;
-        
-        if (ballRadius < 0.5) ballRadius = 0.5;
-        if (ballHeight < 0.5) ballHeight = 0.5;
+        ballRadius -= 0.01;
+        ballHeight -= 0.002;
+
+        if (ballRadius < 3.1) ballRadius = 3.1;
+        if (ballHeight < 1.0) ballHeight = 1.0;
         
         // Update ball position
         ball.position.x = Math.cos(ballAngle) * ballRadius;
@@ -430,6 +461,10 @@ function animate() {
         // Gentle idle rotation
         wheel.rotation.y += 0.001;
     }
+
+    const zoomTarget = (isSpinning && wheelSpeed < 0.03) ? zoomedCameraPosition : defaultCameraPosition;
+    camera.position.lerp(zoomTarget, 0.06);
+    camera.lookAt(0, 0, 0);
     
     renderer.render(scene, camera);
 }
@@ -493,7 +528,7 @@ function setupChipSelector() {
 
 function setupBetControls() {
     document.getElementById('clearBets').addEventListener('click', () => {
-        clearAllBets();
+        clearBetsAndRefund();
     });
     
     document.getElementById('doubleBets').addEventListener('click', () => {
@@ -526,6 +561,18 @@ function placeBet(cell) {
     
     placeBetData(betType, numbers, selectedChip, cell.id);
     startBettingCountdown();
+}
+
+function clearBetsAndRefund() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        clearAllBets();
+        return;
+    }
+    if (currentBets.size === 0) {
+        return;
+    }
+    ws.send(JSON.stringify({ type: 'clearBets' }));
+    clearAllBets();
 }
 
 function placeBetData(betType, numbers, amount, cellId) {
@@ -645,6 +692,7 @@ function addLiveBet(bet) {
     const container = document.getElementById('liveBets');
     const div = document.createElement('div');
     div.className = 'bet-item';
+    div.dataset.playerId = bet.playerId;
     const betTypeLabel = (bet.betType || bet.type || '').toUpperCase();
     
     div.innerHTML = `
@@ -667,6 +715,11 @@ function clearLiveBets() {
     document.getElementById('liveBets').innerHTML = '';
 }
 
+function removeLiveBetsForPlayer(playerId) {
+    const container = document.getElementById('liveBets');
+    const items = Array.from(container.querySelectorAll(`.bet-item[data-player-id="${playerId}"]`));
+    items.forEach(item => item.remove());
+}
 function updatePlayersList(players) {
     const container = document.getElementById('playersList');
     container.innerHTML = '';
