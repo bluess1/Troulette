@@ -141,18 +141,7 @@ function handleWebSocketMessage(data) {
                 isSpinning = false;
                 document.getElementById('resultsOverlay').classList.remove('active');
                 openBettingRound();
-            }, 3200);
-            break;
-
-        case 'betsCleared':
-            if (data.playerId === playerId) {
-                updateBalance(data.balance);
-            }
-            clearAllBets();
-            break;
-
-        case 'betsClearedNotice':
-            removeLiveBetsForPlayer(data.playerId);
+            }, 5000);
             break;
     }
 }
