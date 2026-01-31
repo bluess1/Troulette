@@ -8,6 +8,9 @@ let scene, camera, renderer, wheel, ball;
 let isSpinning = false;
 let bettingTimeRemaining = 0;
 let countdownInterval;
+let bettingOpen = true;
+let bettingCountdownStarted = false;
+const BETTING_WINDOW_SECONDS = 15;
 
 // Roulette wheel layout (European roulette)
 const wheelNumbers = [
@@ -24,6 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setupChipSelector();
     setupBettingTable();
     setupBetControls();
+    setupSpinControl();
 });
 
 function setupUsernameModal() {
@@ -86,15 +90,11 @@ function handleWebSocketMessage(data) {
             
             // Initialize 3D wheel
             init3DWheel();
-            
+
             // Update game state
             updateHistory(data.gameState.history);
             updatePlayersList(data.gameState.players);
-            
-            // If betting period active, start countdown
-            if (data.gameState.bettingTimeRemaining > 0) {
-                startBettingCountdown(data.gameState.bettingTimeRemaining);
-            }
+            openBettingRound();
             break;
             
         case 'playerJoined':
@@ -110,16 +110,12 @@ function handleWebSocketMessage(data) {
                 updateBalance(data.player.balance);
             }
             addLiveBet(data.bet);
-            break;
-            
-        case 'bettingStarted':
-            startBettingCountdown(data.bettingTime);
-            clearAllBets();
-            clearLiveBets();
+            updateSpinButtonState();
             break;
             
         case 'spinStarted':
             isSpinning = true;
+            bettingOpen = false;
             stopBettingCountdown();
             document.getElementById('spinStatus').textContent = 'Spinning...';
             disableBetting();
@@ -141,25 +137,40 @@ function handleWebSocketMessage(data) {
             setTimeout(() => {
                 isSpinning = false;
                 document.getElementById('resultsOverlay').classList.remove('active');
-                enableBetting();
+                openBettingRound();
             }, 5000);
             break;
     }
 }
 
-function startBettingCountdown(seconds) {
-    bettingTimeRemaining = seconds;
+function openBettingRound() {
+    bettingOpen = true;
+    bettingCountdownStarted = false;
+    bettingTimeRemaining = BETTING_WINDOW_SECONDS;
+    clearAllBets();
+    clearLiveBets();
     enableBetting();
     updateSpinStatus();
-    
+    updateSpinButtonState();
+}
+
+function startBettingCountdown() {
+    if (bettingCountdownStarted) return;
+    bettingCountdownStarted = true;
+    updateSpinStatus();
+
     if (countdownInterval) clearInterval(countdownInterval);
-    
+
     countdownInterval = setInterval(() => {
         bettingTimeRemaining--;
         updateSpinStatus();
-        
+
         if (bettingTimeRemaining <= 0) {
             clearInterval(countdownInterval);
+            bettingCountdownStarted = false;
+            if (currentBets.size > 0 && !isSpinning) {
+                requestSpin();
+            }
         }
     }, 1000);
 }
@@ -174,10 +185,17 @@ function stopBettingCountdown() {
 
 function updateSpinStatus() {
     const status = document.getElementById('spinStatus');
-    if (bettingTimeRemaining > 0) {
+    if (!bettingOpen) {
+        status.textContent = 'Wheel in motion...';
+        return;
+    }
+
+    if (bettingCountdownStarted && bettingTimeRemaining > 0) {
         status.textContent = `Place bets: ${bettingTimeRemaining}s`;
+    } else if (currentBets.size > 0) {
+        status.textContent = 'Ready to spin';
     } else {
-        status.textContent = 'Waiting for spin...';
+        status.textContent = 'Awaiting first wager';
     }
 }
 
@@ -193,6 +211,31 @@ function disableBetting() {
         cell.style.pointerEvents = 'none';
         cell.style.opacity = '0.7';
     });
+}
+
+function setupSpinControl() {
+    const spinButton = document.getElementById('spinButton');
+    spinButton.addEventListener('click', () => {
+        if (spinButton.disabled) return;
+        requestSpin();
+    });
+}
+
+function requestSpin() {
+    if (isSpinning || currentBets.size === 0 || !bettingOpen) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    bettingOpen = false;
+    disableBetting();
+    updateSpinStatus();
+    updateSpinButtonState();
+    ws.send(JSON.stringify({ type: 'spin' }));
+}
+
+function updateSpinButtonState() {
+    const spinButton = document.getElementById('spinButton');
+    const shouldEnable = !isSpinning && bettingOpen && currentBets.size > 0;
+    spinButton.disabled = !shouldEnable;
 }
 
 // 3D Wheel Setup
@@ -412,8 +455,12 @@ function setupBettingTable() {
             
             if (redNumbers.includes(number)) {
                 cell.classList.add('red');
+                cell.dataset.color = 'red';
+                cell.style.background = 'var(--roulette-red)';
             } else {
                 cell.classList.add('black');
+                cell.dataset.color = 'black';
+                cell.style.background = 'var(--roulette-black)';
             }
             
             cell.addEventListener('click', () => placeBet(cell));
@@ -463,7 +510,7 @@ function setupBetControls() {
 }
 
 function placeBet(cell) {
-    if (isSpinning || bettingTimeRemaining <= 0) return;
+    if (isSpinning || !bettingOpen) return;
     
     const betType = cell.dataset.type || 'straight';
     let numbers = [];
@@ -478,11 +525,16 @@ function placeBet(cell) {
     }
     
     placeBetData(betType, numbers, selectedChip, cell.id);
+    startBettingCountdown();
 }
 
 function placeBetData(betType, numbers, amount, cellId) {
     if (playerData.balance < amount) {
         alert('Insufficient balance!');
+        return;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        alert('Connection lost. Rejoin to place bets.');
         return;
     }
     
@@ -502,6 +554,8 @@ function placeBetData(betType, numbers, amount, cellId) {
     
     // Display chip on cell
     displayChipOnCell(cellId, amount);
+    updateSpinStatus();
+    updateSpinButtonState();
     
     ws.send(JSON.stringify({
         type: 'placeBet',
@@ -537,6 +591,8 @@ function displayChipOnCell(cellId, amount) {
 function clearAllBets() {
     currentBets.clear();
     document.querySelectorAll('.bet-chip').forEach(chip => chip.remove());
+    updateSpinStatus();
+    updateSpinButtonState();
 }
 
 function getNumbersForBetType(type) {
@@ -589,13 +645,14 @@ function addLiveBet(bet) {
     const container = document.getElementById('liveBets');
     const div = document.createElement('div');
     div.className = 'bet-item';
+    const betTypeLabel = (bet.betType || bet.type || '').toUpperCase();
     
     div.innerHTML = `
         <div class="bet-item-header">
             <span class="bet-username">${bet.username}</span>
             <span class="bet-amount">$${bet.amount}</span>
         </div>
-        <div class="bet-type">${bet.type.toUpperCase()}</div>
+        <div class="bet-type">${betTypeLabel}</div>
     `;
     
     container.insertBefore(div, container.firstChild);
