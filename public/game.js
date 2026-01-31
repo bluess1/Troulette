@@ -12,8 +12,8 @@ let countdownInterval;
 let bettingOpen = true;
 let bettingCountdownStarted = false;
 const BETTING_WINDOW_SECONDS = 18;
-const zoomedCameraPosition = new THREE.Vector3(0, 9.8, 13.5);
-const defaultCameraPosition = new THREE.Vector3(0, 14.5, 20.5);
+const zoomedCameraPosition = new THREE.Vector3(0, 9.5, 13);
+const defaultCameraPosition = new THREE.Vector3(0, 17, 23);
 
 // Roulette wheel layout (European roulette)
 const wheelNumbers = [
@@ -142,18 +142,7 @@ function handleWebSocketMessage(data) {
                 isSpinning = false;
                 document.getElementById('resultsOverlay').classList.remove('active');
                 openBettingRound();
-            }, 3200);
-            break;
-
-        case 'betsCleared':
-            if (data.playerId === playerId) {
-                updateBalance(data.balance);
-            }
-            clearAllBets();
-            break;
-
-        case 'betsClearedNotice':
-            removeLiveBetsForPlayer(data.playerId);
+            }, 5000);
             break;
     }
 }
@@ -270,7 +259,7 @@ function init3DWheel() {
     scene.background = new THREE.Color(0x0b2f24);
     
     // Camera
-    camera = new THREE.PerspectiveCamera(38, container.clientWidth / container.clientHeight, 0.1, 1000);
+    camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
     camera.position.copy(defaultCameraPosition);
     camera.lookAt(0, 0, 0);
     
@@ -369,71 +358,25 @@ function createRouletteWheel() {
     bowl.position.y = 0.55;
     wheel.add(bowl);
 
-    const outerRimGeometry = new THREE.TorusGeometry(7.35, 0.3, 24, 140);
-    const outerRimMaterial = new THREE.MeshPhysicalMaterial({
-        color: 0x3a2416,
-        roughness: 0.28,
-        metalness: 0.25,
-        clearcoat: 0.75,
-        clearcoatRoughness: 0.25,
-        envMapIntensity: 1.1
-    });
-    const outerRim = new THREE.Mesh(outerRimGeometry, outerRimMaterial);
-    outerRim.rotation.x = Math.PI / 2;
-    outerRim.position.y = 1.02;
-    wheel.add(outerRim);
-
-    const innerRingGeometry = new THREE.TorusGeometry(5.95, 0.22, 16, 120);
-    const innerRingMaterial = new THREE.MeshPhysicalMaterial({
-        color: 0x57402a,
-        roughness: 0.25,
-        metalness: 0.32,
-        clearcoat: 0.6,
-        clearcoatRoughness: 0.3
+    const innerRingGeometry = new THREE.TorusGeometry(6.1, 0.25, 16, 100);
+    const innerRingMaterial = new THREE.MeshPhongMaterial({
+        color: 0x3b2a1a,
+        shininess: 70
     });
     const innerRing = new THREE.Mesh(innerRingGeometry, innerRingMaterial);
     innerRing.rotation.x = Math.PI / 2;
-    innerRing.position.y = 1.02;
+    innerRing.position.y = 0.9;
     wheel.add(innerRing);
 
-    const metalHubGeometry = new THREE.CylinderGeometry(1.8, 2.3, 0.75, 64);
-    const metalHubMaterial = new THREE.MeshPhysicalMaterial({
-        color: 0xc4a86b,
-        roughness: 0.14,
-        metalness: 0.95,
-        clearcoat: 0.35,
-        clearcoatRoughness: 0.18,
-        envMapIntensity: 1.2
+    const metalHubGeometry = new THREE.CylinderGeometry(1.6, 1.8, 0.6, 32);
+    const metalHubMaterial = new THREE.MeshPhongMaterial({
+        color: 0x8c7a4a,
+        shininess: 120,
+        specular: 0xfff2b0
     });
     const metalHub = new THREE.Mesh(metalHubGeometry, metalHubMaterial);
-    metalHub.position.y = 1.1;
+    metalHub.position.y = 0.95;
     wheel.add(metalHub);
-
-    const metalCapGeometry = new THREE.CylinderGeometry(2.4, 2.6, 0.22, 64);
-    const metalCapMaterial = new THREE.MeshPhysicalMaterial({
-        color: 0xd7b97a,
-        roughness: 0.12,
-        metalness: 1.0,
-        clearcoat: 0.45,
-        clearcoatRoughness: 0.12,
-        envMapIntensity: 1.25
-    });
-    const metalCap = new THREE.Mesh(metalCapGeometry, metalCapMaterial);
-    metalCap.position.y = 1.45;
-    wheel.add(metalCap);
-
-    const rotorGeometry = new THREE.CylinderGeometry(4.4, 4.6, 0.35, 64);
-    const rotorMaterial = new THREE.MeshPhysicalMaterial({
-        map: createWoodTexture(),
-        roughness: 0.2,
-        metalness: 0.18,
-        clearcoat: 0.9,
-        clearcoatRoughness: 0.18,
-        envMapIntensity: 1.0
-    });
-    const rotor = new THREE.Mesh(rotorGeometry, rotorMaterial);
-    rotor.position.y = 1.02;
-    wheel.add(rotor);
     
     // Number pockets
     const pocketRadius = 5.35;
@@ -597,14 +540,11 @@ let spinElapsed = 0;
 let ballPhase = 'rim';
 
 function startWheelSpin() {
-    wheelSpeed = 0.17;
-    ballSpeed = -0.32;
+    wheelSpeed = 0.16;
+    ballSpeed = -0.27;
     ballAngle = Math.random() * Math.PI * 2;
-    ballRadius = 7.2;
-    ballHeight = 1.35;
-    ballSpiralSpeed = 0.3 + Math.random() * 0.08;
-    spinElapsed = 0;
-    ballPhase = 'rim';
+    ballRadius = 6.4;
+    ballHeight = 1.1;
 }
 
 function animate() {
@@ -614,26 +554,18 @@ function animate() {
     if (isSpinning && (wheelSpeed > 0.001 || ballSpeed < -0.001)) {
         spinElapsed += delta;
         // Rotate wheel
-        wheel.rotation.y += wheelSpeed * (1 + delta);
-        wheelSpeed *= 0.994;
+        wheel.rotation.y += wheelSpeed;
+        wheelSpeed *= 0.995;
 
         // Move ball
-        ballAngle += ballSpeed * (1 + delta);
+        ballAngle += ballSpeed;
 
         // Ball gradually moves inward and down
-        if (spinElapsed > 2.2 && ballPhase === 'rim') {
-            ballPhase = 'drop';
-        }
+        ballRadius -= 0.01;
+        ballHeight -= 0.002;
 
-        if (ballPhase === 'rim') {
-            ballRadius -= 0.05 * delta;
-        } else {
-            ballRadius -= ballSpiralSpeed * delta * 1.6;
-            ballHeight -= 0.2 * delta;
-        }
-
-        if (ballRadius < 3.6) ballRadius = 3.6;
-        if (ballHeight < 1.05) ballHeight = 1.05;
+        if (ballRadius < 3.1) ballRadius = 3.1;
+        if (ballHeight < 1.0) ballHeight = 1.0;
         
         // Update ball position
         const wobble = Math.sin(spinElapsed * 7) * 0.045;
@@ -648,8 +580,8 @@ function animate() {
         wheel.rotation.y += 0.001;
     }
 
-    const zoomTarget = (isSpinning && wheelSpeed < 0.05) ? zoomedCameraPosition : defaultCameraPosition;
-    camera.position.lerp(zoomTarget, 0.05);
+    const zoomTarget = (isSpinning && wheelSpeed < 0.03) ? zoomedCameraPosition : defaultCameraPosition;
+    camera.position.lerp(zoomTarget, 0.06);
     camera.lookAt(0, 0, 0);
     
     renderer.render(scene, camera);
