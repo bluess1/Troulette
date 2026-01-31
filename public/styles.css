@@ -170,7 +170,7 @@ body {
 /* Game Layout */
 .game-layout {
     display: grid;
-    grid-template-columns: 1.7fr 1.8fr 280px;
+    grid-template-columns: 2.3fr 1.4fr 280px;
     gap: 1.5rem;
     padding: 1.5rem;
     max-width: 100%;
@@ -197,7 +197,7 @@ body {
     border-radius: 4px;
     overflow: hidden;
     background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.05) 0%, transparent 70%);
-    min-height: 420px;
+    min-height: 520px;
 }
 
 .wheel-controls {
@@ -749,16 +749,16 @@ body {
 }
 
 .round-closed .game-layout {
-    grid-template-columns: 2.4fr 1.2fr 280px;
+    grid-template-columns: 2.9fr 1fr 280px;
 }
 
 .round-closed .betting-container {
-    transform: scale(0.92);
-    opacity: 0.6;
+    transform: scale(0.86) translateY(12px);
+    opacity: 0.5;
 }
 
 .round-closed .betting-table {
-    opacity: 0.5;
+    opacity: 0.4;
 }
 
 .result-item {

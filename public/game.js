@@ -10,9 +10,9 @@ let bettingTimeRemaining = 0;
 let countdownInterval;
 let bettingOpen = true;
 let bettingCountdownStarted = false;
-const BETTING_WINDOW_SECONDS = 15;
-const zoomedCameraPosition = new THREE.Vector3(0, 10.5, 14);
-const defaultCameraPosition = new THREE.Vector3(0, 15, 20);
+const BETTING_WINDOW_SECONDS = 18;
+const zoomedCameraPosition = new THREE.Vector3(0, 9.5, 13);
+const defaultCameraPosition = new THREE.Vector3(0, 17, 23);
 
 // Roulette wheel layout (European roulette)
 const wheelNumbers = [
@@ -436,11 +436,11 @@ let ballRadius = 6;
 let ballHeight = 0.8;
 
 function startWheelSpin() {
-    wheelSpeed = 0.15;
-    ballSpeed = -0.25;
+    wheelSpeed = 0.16;
+    ballSpeed = -0.27;
     ballAngle = Math.random() * Math.PI * 2;
-    ballRadius = 6;
-    ballHeight = 0.8;
+    ballRadius = 6.4;
+    ballHeight = 1.1;
 }
 
 function animate() {
@@ -455,11 +455,11 @@ function animate() {
         ballAngle += ballSpeed;
 
         // Ball gradually moves inward and down
-        ballRadius -= 0.012;
-        ballHeight -= 0.0025;
+        ballRadius -= 0.01;
+        ballHeight -= 0.002;
 
-        if (ballRadius < 2.3) ballRadius = 2.3;
-        if (ballHeight < 0.75) ballHeight = 0.75;
+        if (ballRadius < 3.1) ballRadius = 3.1;
+        if (ballHeight < 1.0) ballHeight = 1.0;
         
         // Update ball position
         ball.position.x = Math.cos(ballAngle) * ballRadius;
@@ -473,8 +473,8 @@ function animate() {
         wheel.rotation.y += 0.001;
     }
 
-    const zoomTarget = (isSpinning && wheelSpeed < 0.01) ? zoomedCameraPosition : defaultCameraPosition;
-    camera.position.lerp(zoomTarget, 0.05);
+    const zoomTarget = (isSpinning && wheelSpeed < 0.03) ? zoomedCameraPosition : defaultCameraPosition;
+    camera.position.lerp(zoomTarget, 0.06);
     camera.lookAt(0, 0, 0);
     
     renderer.render(scene, camera);
